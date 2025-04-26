@@ -14,11 +14,13 @@ import json
 import collections
 import os
 import itertools
+import pickle
 
 import nltk
-#import eng_syl
+import eng_syl
 import pronouncing
 import pyphen
+from g2p_en import G2p
 
 import string
 import numpy as np
@@ -717,7 +719,7 @@ def inject_stress_mark(syllable: str) -> str:
     cx = []
     injected = False
     for c in syllable:
-        if c in 'aeiou' and not injected:
+        if c in 'aeiouyAEIOUY' and not injected:
             cx.append('+')
             injected = True
 
@@ -868,34 +870,20 @@ class EnglishPoemScansion(object):
 
 
 class EnglishPoetryScansion(object):
-    def __init__(self, dict_dir: str):
+    def __init__(self, model_dir: str):
         # Load the dictionary
-
-        self.pronouncing_dict = cmudict.dict()
-        cmu_dict2 = load_cmudict(os.path.join(dict_dir, "cmudict/cmudict.dict"))
-        for word, px in cmu_dict2.items():
-            if word not in self.pronouncing_dict:
-                self.pronouncing_dict[word] = px
-
-        # Overriding dictionary entries
-        cmu_dict3 = load_cmudict(os.path.join(dict_dir, "cmudict_handmade.dict"))
-        for word, px in cmu_dict3.items():
-            self.pronouncing_dict[word] = px
+        with open(os.path.join(model_dir, "english_scansion_tool.pkl"), "rb") as f:
+            self.pronouncing_dict = pickle.load(f)
+            self.word2syllables = pickle.load(f)
+            self.head_syllables = pickle.load(f)
+            self.tail_syllables = pickle.load(f)
 
         self.rhyme_detectors = []
         self.rhyme_detectors.append(RhymeDetector_Phonemes_1to1())
         self.rhyme_detectors.append(RhymeDetector_ClausulaSlameRx())
-        #self.syllabler = eng_syl.syllabify.Syllabel()
+        self.syllabler = eng_syl.syllabify.Syllabel()
         self.hyph_dic = pyphen.Pyphen(lang='en')
-        self.word2syllables = {"across": ["a", "cross"],}
-        with open(os.path.join(dict_dir, "en.word2syllables.json")) as f:
-            self.word2syllables.update(json.load(f))
-
-        # Pre-computed data for beam search syllabifier
-        with open(os.path.join(dict_dir, 'en.syllables_stat.json')) as f:
-            info = json.load(f)
-        self.head_syllables = info['head_syllables']
-        self.tail_syllables = info['tail_syllables']
+        self.g2p = G2p()
 
     def get_phonemes(self, word0):
         """Get the phoneme sequence for a word"""
@@ -932,6 +920,19 @@ class EnglishPoetryScansion(object):
                 pronunciations = [[]]
             else:
                 for lemma, suffix in extract_base_and_ending(word):
+                    if suffix == 's' and lemma in self.pronouncing_dict:
+                        suffix_phones = []
+                        if lemma[-1] in 'BDGV':
+                            suffix_phones = ['Z']
+                        elif lemma[-1] in 'SZ':
+                            suffix_phones = []
+                        else:
+                            suffix_phones = ['S']
+                        pronunciations = []
+                        for pronunciation0 in self.get_phonemes(lemma):
+                            pronunciations.append(pronunciation0 + suffix_phones)
+                        break
+
                     if suffix and lemma in self.pronouncing_dict:
                         phones2 = suffix2phones[suffix]
                         pronunciations = []
@@ -967,28 +968,32 @@ class EnglishPoetryScansion(object):
                                         pronunciations.append(h + replace_stress_to_secondary(t))
 
             if not pronunciations:
-                raise NotImplementedError()
+                pronunciation = self.g2p(word)
+                if pronunciation:
+                    pronunciations = [pronunciation]
 
         if not pronunciations:
-            pronunciations = self.pronouncing_dict.get(word, [[]])
+            raise RuntimeError(f'Could not generate pronunciation for word "{word}"')
 
         return pronunciations
 
-    def syllabify_with_pronouncing(self, word):
+    def syllabify_with_pronouncing(self, word, phones=None):
         # Heuristic #1 - detect words with one of now syllable leteters.
         if len(re.findall(r'[aeiouy]', word, flags=re.I)) <= 1:
             return [word]
 
         lword = word.lower()
-        phones_list = pronouncing.phones_for_word(lword)
-        if not phones_list:
-            phones2 = self.get_phonemes(word)
-            if phones2:
-                phones = phones2[0]
+
+        if phones is None:
+            phones_list = pronouncing.phones_for_word(lword)
+            if not phones_list:
+                phones2 = self.get_phonemes(word)
+                if phones2:
+                    phones = phones2[0]
+                else:
+                    return [word]
             else:
-                return [word]
-        else:
-            phones = phones_list[0].split()
+                phones = phones_list[0].split()
 
         vowel_count = sum((phone[:2] in vowels) for phone in phones)
         if vowel_count <= 1:
@@ -1043,6 +1048,12 @@ class EnglishPoetryScansion(object):
                 syllables = final_paths[0][0]
                 return syllables
 
+        sx = self.syllabler.syllabify(lword)
+        if sx:
+            syllables = sx.split('-')
+            if len(syllables) == vowel_count:
+                return syllables
+
         # -------------------------------------------------------------------
         # Fall-back algorithm for cases when beam search syllabifier fails.
 
@@ -1068,19 +1079,19 @@ class EnglishPoetryScansion(object):
         syllables.append(word[i:])
         return syllables
 
-    def get_syllables(self, word):
+    def get_syllables(self, word, phones=None):
         if len(word) < 2 or re.match(r'^\W+$', word):
             return [word]
 
         lword = word.lower()
 
         if lword in self.word2syllables:
-            sx = self.word2syllables[lword]
+            sx = list(self.word2syllables[lword])
             if is_Aa(word):
                 sx[0] = Aa(sx[0])
             return sx
 
-        sx = self.syllabify_with_pronouncing(lword)
+        sx = self.syllabify_with_pronouncing(lword, phones)
         if is_Aa(word):
             sx[0] = Aa(sx[0])
         return sx
@@ -1261,7 +1272,7 @@ class EnglishPoetryScansion(object):
 
         for form in tokenize_slowly(line.strip()):
             pronunciations = self.get_phonemes(form)
-            syllabifications = [self.get_syllables(form)] * len(pronunciations)
+            syllabifications = [self.get_syllables(form, pronunciation) for pronunciation in pronunciations]
             nodes.append(EnglishWord(form, pronunciations, syllabifications))
 
         for word1, word2 in zip(nodes, nodes[1:]):
@@ -1381,7 +1392,10 @@ if __name__ == '__main__':
     #nltk.download('cmudict')
 
     # Load the dictionary
-    tool = EnglishPoetryScansion("/home/inkoziev/polygon/text_generator/data/poetry/dict")
+    tool = EnglishPoetryScansion(model_dir="/home/inkoziev/polygon/text_generator/models/scansion_tool")
+
+    sx = tool.get_syllables("Impregnable")
+    print(sx)
 
     sx = tool.get_syllables("story")
     print(sx)
