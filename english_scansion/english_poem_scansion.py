@@ -27,8 +27,8 @@ import numpy as np
 from nltk.corpus import cmudict
 from typing import List, Set, Dict, Tuple, Optional
 
-from generative_poetry.tokenization_utils import tokenize_slowly
-from generative_poetry.whitespace_normalization import normalize_whitespaces
+from .tokenization_utils import tokenize_slowly
+from .whitespace_normalization import normalize_whitespaces
 
 
 def tokenize(s):
@@ -1177,14 +1177,25 @@ class EnglishPoetryScansion(object):
             phone2 = phonemes2[offset]
             
             if phone1[:2] in vowels and phone2[:2] in vowels:
-                if phone1[:2] != phone2[:2]:
+                #if phone1[:2] != phone2[:2]:
+                #    return RhymedWords.unrhymed()
+                sim = 0.0
+                if phone1[:2] == phone2[:2]:
+                    sim = 1.0
+                elif (phone1, phone2) in phoneme_matching:
+                    sim = phoneme_matching[(phone1, phone2)]
+                elif (phone2, phone1) in phoneme_matching:
+                    sim = phoneme_matching[(phone2, phone1)]
+                if sim == 0.0:
                     return RhymedWords.unrhymed()
-                
+
                 if phone1[-1] in '12' and phone2[-1] in '12':
                     # Дошли до ударных гласных в обоих цепочках, значит фиксируем созвучие
                     clausula1_str = ' '.join(phonemes1[offset:])
                     clausula2_str = ' '.join(phonemes2[offset:])
                     return RhymedWords(clausula1=clausula1_str, clausula2=clausula2_str, score=fit_score)
+                else:
+                    fit_score *= sim
             else:
                 sim = 0.0
                 if phone1 == phone2:
@@ -1441,6 +1452,9 @@ if __name__ == '__main__':
     # Load the dictionary
     tool = EnglishPoetryScansion(model_dir="/home/inkoziev/polygon/text_generator/models/scansion_tool")
 
+    sx = tool.get_syllables("maidenhead")
+    print(sx)
+
     sx = tool.get_syllables("Impregnable")
     print(sx)
 
@@ -1461,6 +1475,9 @@ if __name__ == '__main__':
 
     for word in ["I'm", "We've", "Don't", "won't", "doesn't", "They're",  "Dogs"]:
         print("{} ==> {}".format(word, tool.get_phonemes(word)))
+
+    r = tool.do_words_rhyme(word1='wide', word2='countryside')
+    assert r.score > 0.0
 
     r = tool.do_words_rhyme(word1='feet', word2='fit')
     assert r.score > 0.0
