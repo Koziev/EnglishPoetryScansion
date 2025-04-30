@@ -27,8 +27,8 @@ import numpy as np
 from nltk.corpus import cmudict
 from typing import List, Set, Dict, Tuple, Optional
 
-from tokenization_utils import tokenize_slowly
-from whitespace_normalization import normalize_whitespaces
+from generative_poetry.tokenization_utils import tokenize_slowly
+from generative_poetry.whitespace_normalization import normalize_whitespaces
 
 
 def tokenize(s):
@@ -311,6 +311,12 @@ class RhymeDetector_Phonemes_1to1(object):
             # А в клаузуле "more way" мы имеем безударную "way". Надо сделать, чтобы они считались близкими с точки зрения рифмовки.
             # Norway <==> more way
             return 0.99
+
+        # countryside <==> wide
+        # [AY2 D]  <==> [AY1 D]
+        # Основное и вторичное ударения - считаем созвучными.
+        if f1[:2] in vowels and f1[:2] == f2[:2] and f1[2:] in '12' and f2[2:] in '12':
+            return 1.0
 
         if (f1, f2) in phoneme_matching:
             return phoneme_matching[(f1, f2)]
@@ -822,10 +828,10 @@ def replace_stress_to_secondary(phones):
         new_phone = phone
 
         if phone[:2] in vowels:
-            if phone[3] == '1':
+            if phone[2] == '1':
                 # Primary stress convert to secondary.
                 new_phone = phone[:2] + '2'
-            elif phone[3] == '2':
+            elif phone[2] == '2':
                 # Supress secondary stress
                 new_phone = phone[:2] + '0'
 
@@ -956,6 +962,7 @@ class EnglishPoetryScansion(object):
 
                 # Handle compound words with frequent second part (like human-ware)
                 if not pronunciations:
+                    pronunciations = []
                     for partition, second_parts in common_second_parts.items():
                         for second_part in second_parts:
                             if word.endswith(second_part) and second_part in self.pronouncing_dict:
@@ -1147,9 +1154,9 @@ class EnglishPoetryScansion(object):
                 if '1' in phoneme:  # Primary stress
                     last_stressed = i
                     break
-                #elif '2' in phoneme and last_stressed is None:  # Secondary stress
-                #    last_stressed = i
-                #    break
+                # elif '2' in phoneme and last_stressed is None:  # Secondary stress
+                #     last_stressed = i
+                #     break
 
         return last_stressed
 
@@ -1163,76 +1170,112 @@ class EnglishPoetryScansion(object):
         if not phonemes1 or not phonemes2:
             return RhymedWords.unrhymed()
 
-        idx1 = self.get_last_stressed_vowel_syllable(phonemes1)
-        idx2 = self.get_last_stressed_vowel_syllable(phonemes2)
+        offset = -1
+        fit_score = 1.0
+        while True:
+            phone1 = phonemes1[offset]
+            phone2 = phonemes2[offset]
+            
+            if phone1[:2] in vowels and phone2[:2] in vowels:
+                if phone1[:2] != phone2[:2]:
+                    return RhymedWords.unrhymed()
+                
+                if phone1[-1] in '12' and phone2[-1] in '12':
+                    # Дошли до ударных гласных в обоих цепочках, значит фиксируем созвучие
+                    clausula1_str = ' '.join(phonemes1[offset:])
+                    clausula2_str = ' '.join(phonemes2[offset:])
+                    return RhymedWords(clausula1=clausula1_str, clausula2=clausula2_str, score=fit_score)
+            else:
+                sim = 0.0
+                if phone1 == phone2:
+                    sim = 1.0
+                elif (phone1, phone2) in phoneme_matching:
+                    sim = phoneme_matching[(phone1, phone2)]
+                elif (phone2, phone1) in phoneme_matching:
+                    sim = phoneme_matching[(phone2, phone1)]
 
-        if idx1 is None or idx2 is None:
-            return RhymedWords.unrhymed()
+                if sim > 0:
+                    fit_score *= sim
+                else:
+                    return RhymedWords.unrhymed()
 
-        clausula1 = phonemes1[idx1:]
-        clausula2 = phonemes2[idx2:]
-
-        if clausula1 == clausula2:
-            return RhymedWords(clausula1=clausula1, clausula2=clausula2, score=1.0)
-
-        clausula1_str = ' '.join(clausula1)
-        clausula2_str = ' '.join(clausula2)
-
-        phonemes1_str = ' '.join(phonemes1)
-        phonemes2_str = ' '.join(phonemes2)
-
-        for rhyme_detector in self.rhyme_detectors:
-            fit_score = rhyme_detector.fit(clausula1, phonemes1_str, clausula2, phonemes2_str)
-            if fit_score > 0.0:
-                return RhymedWords(clausula1=clausula1_str, clausula2=clausula2_str, score=fit_score)
+            offset -= 1
+            if -offset > len(phonemes1) or -offset > len(phonemes2):
+                break
 
         return RhymedWords.unrhymed()
 
-    def extract_last_word(self, line):
-        """Extract the last word from a line of poetry"""
-        # Remove punctuation and split into words
-        line = line.translate(str.maketrans('', '', string.punctuation))
-        words = line.strip().split()
-        return words[-1].lower() if words else None
+        #
+        # idx1 = self.get_last_stressed_vowel_syllable(phonemes1)
+        # idx2 = self.get_last_stressed_vowel_syllable(phonemes2)
+        #
+        # if idx1 is None or idx2 is None:
+        #     return RhymedWords.unrhymed()
+        #
+        # clausula1 = phonemes1[idx1:]
+        # clausula2 = phonemes2[idx2:]
+        #
+        # if clausula1 == clausula2:
+        #     return RhymedWords(clausula1=clausula1, clausula2=clausula2, score=1.0)
+        #
+        # clausula1_str = ' '.join(clausula1)
+        # clausula2_str = ' '.join(clausula2)
+        #
+        # phonemes1_str = ' '.join(phonemes1)
+        # phonemes2_str = ' '.join(phonemes2)
+        #
+        # for rhyme_detector in self.rhyme_detectors:
+        #     fit_score = rhyme_detector.fit(clausula1, phonemes1_str, clausula2, phonemes2_str)
+        #     if fit_score > 0.0:
+        #         return RhymedWords(clausula1=clausula1_str, clausula2=clausula2_str, score=fit_score)
+        #
+        # return RhymedWords.unrhymed()
 
-    def analyze_poem_rhyme_scheme(self, poem_lines):
-        """Analyze the rhyme scheme of a poem"""
-        rhyme_scheme = []
-        rhyme_map = {}
-        current_char = ord('A')
+    # def extract_last_word(self, line):
+    #     """Extract the last word from a line of poetry"""
+    #     # Remove punctuation and split into words
+    #     line = line.translate(str.maketrans('', '', string.punctuation))
+    #     words = line.strip().split()
+    #     return words[-1].lower() if words else None
 
-        for i, line in enumerate(poem_lines):
-            last_word = self.extract_last_word(line)
-            if not last_word:
-                rhyme_scheme.append(' ')
-                continue
-
-            # Check against previous lines
-            best_fit = None
-            best_score = 0.0
-            best_matched_letter = None
-            for j in [i-1, i-2, i-3]:
-                if j >= 0:
-                    prev_last_word = self.extract_last_word(poem_lines[j])
-                    if prev_last_word:
-                        fit = self.do_words_rhyme(last_word, prev_last_word)
-                        if fit.score > best_score:
-                            best_fit = fit
-                            best_score = fit.score
-                            best_matched_letter = rhyme_map[j]
-                            if fit.score == 1.0:
-                                break
-
-            if best_fit is not None:
-                rhyme_scheme.append(best_matched_letter)
-                rhyme_map[i] = best_matched_letter
-            else:
-                rhyme_char = chr(current_char)
-                rhyme_scheme.append(rhyme_char)
-                rhyme_map[i] = rhyme_char
-                current_char += 1
-
-        return ''.join(rhyme_scheme)
+    # def analyze_poem_rhyme_scheme(self, poem_lines):
+    #     """Analyze the rhyme scheme of a poem"""
+    #     rhyme_scheme = []
+    #     rhyme_map = {}
+    #     current_char = ord('A')
+    # 
+    #     for i, line in enumerate(poem_lines):
+    #         last_word = self.extract_last_word(line)
+    #         if not last_word:
+    #             rhyme_scheme.append(' ')
+    #             continue
+    # 
+    #         # Check against previous lines
+    #         best_fit = None
+    #         best_score = 0.0
+    #         best_matched_letter = None
+    #         for j in [i-1, i-2, i-3]:
+    #             if j >= 0:
+    #                 prev_last_word = self.extract_last_word(poem_lines[j])
+    #                 if prev_last_word:
+    #                     fit = self.do_words_rhyme(last_word, prev_last_word)
+    #                     if fit.score > best_score:
+    #                         best_fit = fit
+    #                         best_score = fit.score
+    #                         best_matched_letter = rhyme_map[j]
+    #                         if fit.score == 1.0:
+    #                             break
+    # 
+    #         if best_fit is not None:
+    #             rhyme_scheme.append(best_matched_letter)
+    #             rhyme_map[i] = best_matched_letter
+    #         else:
+    #             rhyme_char = chr(current_char)
+    #             rhyme_scheme.append(rhyme_char)
+    #             rhyme_map[i] = rhyme_char
+    #             current_char += 1
+    # 
+    #     return ''.join(rhyme_scheme)
 
     def build_rhyme_graph(self, rhyming_tails):
         line_rhymes = [RhymeGraphNode() for _ in rhyming_tails]
@@ -1323,41 +1366,45 @@ class EnglishPoetryScansion(object):
         best_rhyme_scheme = None
 
         for metre_name, metre_signature in self.enumerate_meters(plines):
-            line_mappings = []
+            line_mappings_lists = []
             for ipline, pline in enumerate(plines):
 
-                best_line_mapping = None
+                mappings = []
 
                 for prefix in [0, 1]:
                     cursor = MetreMappingCursor(metre_signature[ipline % len(metre_signature)], prefix=prefix)
-                    metre_mappings = cursor.map(pline, self)
-                    metre_mapping1 = metre_mappings[0]
-                    if best_line_mapping is None or best_line_mapping.score < metre_mapping1.score:
-                        best_line_mapping = metre_mapping1
+                    mappings.extend(cursor.map(pline, self))
 
-                line_mappings.append(best_line_mapping)
+                # Keep top-2 mappings for each line
+                mappings = sorted(mappings, key=lambda z: -z.score)[:2]
+                line_mappings_lists.append(mappings)
 
-            meter_score = np.prod([m.get_score() for m in line_mappings])
+            for icombo, line_mappings in enumerate(itertools.product(*line_mappings_lists)):
+                if icombo > 64:
+                    break
 
-            # Evaluate rhyming
-            rhyming_tails = [self.extract_rhyming_tail(line_mapping) for line_mapping in line_mappings]
-            rhyme_graph, rhyme_scheme = self.build_rhyme_graph(rhyming_tails)
+                meter_score = np.prod([m.get_score() for m in line_mappings])
 
-            rhyme_score = 1.0
-            for rhyme in rhyme_graph:
-                if rhyme.fit_to_right is None:
-                    if rhyme.fit_to_left is None:
-                        rhyme_score *= 0.5
-                else:
-                    rhyme_score *= rhyme.fit_to_right.score
+                # Evaluate rhyming
+                rhyming_tails = [self.extract_rhyming_tail(line_mapping) for line_mapping in line_mappings]
+                rhyme_graph, rhyme_scheme = self.build_rhyme_graph(rhyming_tails)
 
-            total_score = meter_score * rhyme_score
-            if total_score > best_score:
-                best_meter_name = metre_name
-                best_score = total_score
-                best_mappings = line_mappings
-                best_rhyme_graph = rhyme_graph
-                best_rhyme_scheme = rhyme_scheme
+                # Each unrhymed line decrease the total score of the poem
+                rhyme_score = 1.0
+                for rhyme in rhyme_graph:
+                    if rhyme.fit_to_right is None:
+                        if rhyme.fit_to_left is None:
+                            rhyme_score *= 0.5
+                    else:
+                        rhyme_score *= rhyme.fit_to_right.score
+
+                total_score = meter_score * rhyme_score
+                if total_score > best_score:
+                    best_meter_name = metre_name
+                    best_score = total_score
+                    best_mappings = line_mappings
+                    best_rhyme_graph = rhyme_graph
+                    best_rhyme_scheme = rhyme_scheme
 
         scansion = EnglishPoemScansion(best_mappings, best_meter_name, best_rhyme_graph, best_rhyme_scheme, best_score)
         return scansion
