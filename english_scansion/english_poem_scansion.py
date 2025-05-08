@@ -28,8 +28,8 @@ import numpy as np
 from nltk.corpus import cmudict
 from typing import List, Set, Dict, Tuple, Optional
 
-from generative_poetry.tokenization_utils import tokenize_slowly
-from generative_poetry.whitespace_normalization import normalize_whitespaces
+from .tokenization_utils import tokenize_slowly
+from .whitespace_normalization import normalize_whitespaces
 
 
 def tokenize(s):
@@ -960,6 +960,8 @@ class EnglishPoemScansion(object):
 
 class EnglishPoetryScansion(object):
     def __init__(self, model_dir: str):
+        self.max_words_per_line = 12
+
         # Load the dictionary
         with open(os.path.join(model_dir, "english_scansion_tool.pkl"), "rb") as f:
             self.pronouncing_dict = pickle.load(f)
@@ -1471,6 +1473,10 @@ class EnglishPoetryScansion(object):
 
     def align_stanza(self, poem_lines: List[str]) -> EnglishPoemScansion:
         plines = [self.parse_line(line) for line in poem_lines]
+
+        for pline in plines:
+            if len(pline) > self.max_words_per_line:
+                raise RuntimeError(f'Too many words in a line {pline}')
 
         # Try every meter, estimate fitness and choose the best one.
         best_score = 0.0
