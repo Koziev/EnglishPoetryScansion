@@ -28,8 +28,8 @@ import numpy as np
 from nltk.corpus import cmudict
 from typing import List, Set, Dict, Tuple, Optional
 
-from .tokenization_utils import tokenize_slowly
-from .whitespace_normalization import normalize_whitespaces
+from generative_poetry.tokenization_utils import tokenize_slowly
+from generative_poetry.whitespace_normalization import normalize_whitespaces
 
 
 def tokenize(s):
@@ -460,7 +460,7 @@ class MetreMappingResult(object):
                     factor = {4: 0.30, 5: 0.20}[l]
 
             self.score *= factor
-
+        self.signature = signature
         return
 
     def count_stress_marks(self) -> int:
@@ -517,7 +517,12 @@ class WordMappingResult(object):
     def __init__(self, word: EnglishWord,
                  pronunciation: EnglishWordPronunciation,
                  TP: int, FP: int, TN: int, FN: int,
-                 syllabic_mapping, stress_shift, additional_score_factor):
+                 syllabic_mapping,
+                 stress_shift: int,
+                 additional_score_factor: float,
+                 meter_cursor_defect: bool,
+                 num_cursor_defects: int
+                 ):
         self.word = word
         self.pronunciation = pronunciation
         self.TP = TP
@@ -529,6 +534,8 @@ class WordMappingResult(object):
         self.metre_score = pow(0.5, FP) * pow(0.95, FN) * additional_score_factor
         self.total_score = self.metre_score * pronunciation.get_score()
         self.stress_shift = stress_shift
+        self.meter_cursor_defect = meter_cursor_defect
+        self.num_cursor_defects = num_cursor_defects
 
     def get_total_score(self):
         return self.total_score
@@ -599,6 +606,8 @@ class WordMappingCursor(object):
         self.additional_score = 1.0
         self.meter_cursor = 0
         self.word_syllable_index = 0
+        self.meter_cursor_defect = False
+        self.num_cursor_defects = 0
 
 
 class MetreMappingCursor(object):
@@ -617,7 +626,7 @@ class MetreMappingCursor(object):
         else:
             return self.metre_signature[cursor % self.length]
 
-    def map(self, stressed_words_chain, aligner):
+    def map(self, stressed_words_chain):
         start_results = [MetreMappingResult(self.prefix, self.metre_signature)]
         final_results = []
         self.map_chain(prev_node=stressed_words_chain[0], prev_results=start_results, final_results=final_results)
@@ -649,7 +658,7 @@ class MetreMappingCursor(object):
                 next_metre_mapping.add_word_mapping(word_mapping)
                 new_results.append(next_metre_mapping)
 
-        new_results = sorted(new_results, key=lambda z: -z.get_score())
+        new_results = sorted(new_results, key=lambda z: -z.get_score()) #[:100]
 
         return new_results
 
@@ -666,7 +675,10 @@ class MetreMappingCursor(object):
                                          FN=0,
                                          syllabic_mapping=[],
                                          stress_shift=False,
-                                         additional_score_factor=1.0)
+                                         additional_score_factor=1.0,
+                                         meter_cursor_defect=result.word_mappings[-1].meter_cursor_defect if result.word_mappings else False,
+                                         num_cursor_defects=result.word_mappings[-1].num_cursor_defects if result.word_mappings else 0
+                                         )
             result_mappings.append((mapping1, result.cursor))
         else:
             current_mappings = []
@@ -674,6 +686,8 @@ class MetreMappingCursor(object):
                 word_start = WordMappingCursor()
                 word_start.pronuncation = pronuncation
                 word_start.meter_cursor = result.cursor
+                word_start.meter_cursor_defect = result.word_mappings[-1].meter_cursor_defect if result.word_mappings else False
+                word_start.num_cursor_defects = result.word_mappings[-1].num_cursor_defects if result.word_mappings else 0
                 current_mappings.append(word_start)
 
             while current_mappings:
@@ -689,6 +703,7 @@ class MetreMappingCursor(object):
                         new_mapping.meter_cursor += 1
                         new_mapping.word_syllable_index += 1
                         new_mapping.syllabic_mapping.append('TP')
+                        new_mapping.meter_cursor_defect = False
 
                         # Штрафуем за ударность артиклей
                         if re.search(r'^(a|an|the)$', current_mapping.pronuncation.form, flags=re.I):
@@ -702,8 +717,9 @@ class MetreMappingCursor(object):
                         new_mapping.meter_cursor += 1
                         new_mapping.word_syllable_index += 1
                         new_mapping.syllabic_mapping.append('TN')
+                        new_mapping.meter_cursor_defect = False
                         new_mappings.append(new_mapping)
-                    elif meter_stress in (1,2) and word_stress == 0:
+                    elif meter_stress == 1 and word_stress == 0:
                         # Ударение должно быть, но в слове этот слог безударный
 
                         # Вариант 1: небольшой штраф за безударность, метрический курсор сдвигаем как обычно
@@ -713,16 +729,20 @@ class MetreMappingCursor(object):
                         new_mapping.word_syllable_index += 1
                         new_mapping.syllabic_mapping.append('FN')
                         new_mapping.additional_score *= 0.98
+                        new_mapping.meter_cursor_defect = False
                         new_mappings.append(new_mapping)
 
                         # Вариант 2: штраф побольше, метрический курсор не сдвигаем.
-                        new_mapping = copy.deepcopy(current_mapping)
-                        new_mapping.FN += 1
-                        #new_mapping.meter_cursor += 1
-                        new_mapping.word_syllable_index += 1
-                        new_mapping.syllabic_mapping.append('FN')
-                        new_mapping.additional_score *= 0.90
-                        new_mappings.append(new_mapping)
+                        if not current_mapping.meter_cursor_defect and current_mapping.num_cursor_defects < 1:
+                            new_mapping = copy.deepcopy(current_mapping)
+                            new_mapping.FN += 1
+                            #new_mapping.meter_cursor += 1
+                            new_mapping.word_syllable_index += 1
+                            new_mapping.syllabic_mapping.append('FN')
+                            new_mapping.additional_score *= 0.90
+                            new_mapping.meter_cursor_defect = True
+                            new_mapping.num_cursor_defects += 1
+                            new_mappings.append(new_mapping)
                     elif meter_stress == 0 and word_stress in (1, 2):
                         # Ударения не должно быть, но в слове этот слог ударный
 
@@ -733,6 +753,7 @@ class MetreMappingCursor(object):
                             new_mapping.meter_cursor += 1
                             new_mapping.word_syllable_index += 1
                             new_mapping.syllabic_mapping.append('TN')
+                            new_mapping.meter_cursor_defect = False
                             new_mappings.append(new_mapping)
                         else:
                             # Вариант 1: штраф за безударность, метрический курсор сдвигаем как обычно
@@ -742,16 +763,20 @@ class MetreMappingCursor(object):
                             new_mapping.word_syllable_index += 1
                             new_mapping.syllabic_mapping.append('FP')
                             new_mapping.additional_score *= 0.90
+                            new_mapping.meter_cursor_defect = False
                             new_mappings.append(new_mapping)
 
                             # Вариант 2: штраф за безударность, метрический курсор не сдвигаем
-                            new_mapping = copy.deepcopy(current_mapping)
-                            new_mapping.FP += 1
-                            #new_mapping.meter_cursor += 1
-                            new_mapping.word_syllable_index += 1
-                            new_mapping.syllabic_mapping.append('FP')
-                            new_mapping.additional_score *= 0.85
-                            new_mappings.append(new_mapping)
+                            if not current_mapping.meter_cursor_defect and current_mapping.num_cursor_defects < 1:
+                                new_mapping = copy.deepcopy(current_mapping)
+                                new_mapping.FP += 1
+                                #new_mapping.meter_cursor += 1
+                                new_mapping.word_syllable_index += 1
+                                new_mapping.syllabic_mapping.append('FP')
+                                new_mapping.additional_score *= 0.85
+                                new_mapping.meter_cursor_defect = True
+                                new_mapping.num_cursor_defects += 1
+                                new_mappings.append(new_mapping)
                     else:
                         raise NotImplementedError()
 
@@ -766,7 +791,9 @@ class MetreMappingCursor(object):
                                                      FN=new_mapping.FN,
                                                      syllabic_mapping=new_mapping.syllabic_mapping,
                                                      stress_shift=False,
-                                                     additional_score_factor=new_mapping.additional_score)
+                                                     additional_score_factor=new_mapping.additional_score,
+                                                     meter_cursor_defect=new_mapping.meter_cursor_defect,
+                                                     num_cursor_defects=new_mapping.num_cursor_defects)
                         # mapping1.pronunciation.stress_signature
                         # mapping1.syllabic_mapping
                         
@@ -780,127 +807,6 @@ class MetreMappingCursor(object):
                         result_mappings.append((mapping1, new_mapping.meter_cursor))
                     else:
                         current_mappings.append(new_mapping)
-
-        return result_mappings
-
-
-        additional_score_factor = 1.0
-
-        for stressed_word in stressed_word_group.pronunciations:
-
-            cursor = result.cursor
-            TP, FP, TN, FN = 0, 0, 0, 0
-            syllabic_mapping = []
-
-            if stressed_word.stress_signature == [1]:
-                # Односложное слово.
-                TP, FP, FN = 0, 0, 0
-
-                if self.get_stress(cursor) == 0:
-                    # В этом месте ожидается безударный слог - делаем слово безударным с некоторым дисконтом.
-                    # Дисконт можно делать 0 для служебных слов и некоторым для значащих слов (хорошо бы подтянуть список частот односложных слов,
-                    # и дисконт привязать к этой частоте)
-
-                    if stressed_word.form in ('a', 'an', 'the'):
-                        TN = 1
-                    elif stressed_word.form in ('of', 'to', 'for', 'by', 'in', 'at'):
-                        TN = 1
-                        if stressed_word.location_in_clause == 'last':
-                            additional_score_factor *= 0.50
-                        else:
-                            additional_score_factor *= 0.99
-                    elif stressed_word.form in ('have', 'had', 'has', 'am', 'was', 'is', 'were', 'do', 'did', 'does'):
-                        TN = 1
-                        if stressed_word.location_in_clause == 'first':
-                            additional_score_factor *= 0.50
-                        else:
-                            additional_score_factor *= 0.99
-                    else:
-                        TN = 1
-                        additional_score_factor *= 0.95
-
-                    syllabic_mapping = ['TN']
-                    cursor += 1
-                else:
-                    # В этом месте ожидается ударный слог.
-                    # Сильно штрафуем за ударность артиклей, немного штрафуем за ударность некоторых предлогов (если не конец вопроса).
-
-                    if stressed_word.form in ('a', 'an', 'the'):
-                        FP = 1
-                        additional_score_factor *= 0.10
-                    elif stressed_word.form in ('of', 'to', 'for', 'by', 'in', 'at'):
-                        if stressed_word.location_in_clause == 'last':
-                            TP = 1
-                            additional_score_factor *= 0.98
-                        else:
-                            FP = 1
-                            additional_score_factor *= 0.50
-                    elif stressed_word.form in ('have', 'had', 'has', 'am', 'was', 'is', 'were', 'do', 'did', 'does'):
-                        if stressed_word.location_in_clause == 'first':
-                            TN = 1
-                            additional_score_factor *= 0.99
-                        else:
-                            FP = 1
-                            additional_score_factor *= 0.50
-                    else:
-                        TP = 1
-
-                    syllabic_mapping = ['TN']
-                    cursor += 1
-
-            else:
-                for word_sign in stressed_word.stress_signature:
-                    metre_sign = self.get_stress(cursor)
-                    if metre_sign == 1:
-                        if word_sign == 1:
-                            # Ударение должно быть и оно есть
-                            TP += 1
-                            syllabic_mapping.append('TP')
-                        elif word_sign == 2:
-                            # Ударение должно быть, и есть слабое на этом слоге
-                            #TP += 0.5
-                            TP += 1
-                            additional_score_factor *= 0.98
-                            syllabic_mapping.append('TP')
-                        elif word_sign == 0:
-                            # ударение должно быть, но его нет
-                            FN += 1
-                            syllabic_mapping.append('FN')
-                        else:
-                            raise RuntimeError()
-                    else:
-                        if word_sign == 1:
-                            # Ударения не должно быть, но оно есть
-                            FP += 1
-                            syllabic_mapping.append('FP')
-                        elif word_sign == 2:
-                            # Ударения не должно быть, и в этом месте оно слабое.
-                            TN += 1
-                            syllabic_mapping.append('TN')
-                        elif word_sign == 0:
-                            # Ударения не должно быть, и его нет
-                            TN += 1
-                            syllabic_mapping.append('TN')
-                        else:
-                            raise RuntimeError()
-                    cursor += 1
-
-            # Проверим сочетание ударения в предыдущем слове и в текущем, в частности - оштрафуем за два ударных слога подряд (спондей)
-            if len(stressed_word.stress_signature) > 0:
-                if len(result.word_mappings) > 0:
-                    prev_mapping = result.word_mappings[-1]
-                    if prev_mapping.syllabic_mapping:  # prev_mapping.word.stress_signature:
-                        if prev_mapping.syllabic_mapping[-1] == 'TP':  # prev_mapping.word.stress_signature[-1] == 1:  # предыдущее слово закончилось ударным слогом
-                            if syllabic_mapping[0] == 1:  # stressed_word.stress_signature[0] == 1:
-                                # большой штраф за два ударных подряд
-                                additional_score_factor *= 0.9
-
-            mapping1 = WordMappingResult(stressed_word,
-                                         TP, FP, TN, FN,
-                                         syllabic_mapping=syllabic_mapping,
-                                         stress_shift=False,
-                                         additional_score_factor=additional_score_factor)
-            result_mappings.append((mapping1, cursor))
 
         return result_mappings
 
@@ -946,26 +852,6 @@ class RhymeGraphNode(object):
         self.offset_to_left = 0
         self.fit_to_left = None
         self.rhyme_scheme_letter = '-'
-
-
-def load_cmudict(file_path):
-    cmudict = collections.defaultdict(list)
-    with open(file_path, 'r', encoding='latin-1') as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                if line.startswith(';;;'):  # Skip comments
-                    continue
-                line = re.sub(r'#(.+)$', '', line).strip()
-                word, *phonemes = line.strip().split()
-
-                m = re.match(r'^(.+)\(\d\)$', word)
-                if m:
-                    word = m.group(1)
-
-                cmudict[word.lower()].append(phonemes)  # Store in lowercase
-
-    return cmudict
 
 
 suffix2phones = {
@@ -1601,15 +1487,16 @@ class EnglishPoetryScansion(object):
 
                 for prefix in [0, 1]:
                     cursor = MetreMappingCursor(metre_signature[ipline % len(metre_signature)], prefix=prefix)
-                    mx = cursor.map(pline, self)
+                    mx = cursor.map(pline)
                     mappings.extend(mx)
 
-                # Keep top-2 mappings for each line
-                mappings = sorted(mappings, key=lambda z: -z.score)[:2]
+                # Keep best mappings for each line
+                #mappings_set = dict((mapping.get_stress_signature_str(), mapping) for mapping in mappings)
+                mappings = sorted(mappings, key=lambda z: -z.score)[:4]
                 line_mappings_lists.append(mappings)
 
             for icombo, line_mappings in enumerate(itertools.product(*line_mappings_lists)):
-                if icombo > 64:
+                if icombo > 256:
                     break
 
                 meter_score = np.prod([m.get_score() for m in line_mappings])
