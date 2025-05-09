@@ -28,8 +28,8 @@ import numpy as np
 from nltk.corpus import cmudict
 from typing import List, Set, Dict, Tuple, Optional
 
-from .tokenization_utils import tokenize_slowly
-from .whitespace_normalization import normalize_whitespaces
+from generative_poetry.tokenization_utils import tokenize_slowly
+from generative_poetry.whitespace_normalization import normalize_whitespaces
 
 
 def tokenize(s):
@@ -389,7 +389,7 @@ class EnglishWord(object):
         self.next_word = None
 
     def __repr__(self):
-        return self.form
+        return self.form if self.form else '<NONE>'
 
     @staticmethod
     def build_start_node():
@@ -960,7 +960,7 @@ class EnglishPoemScansion(object):
 
 class EnglishPoetryScansion(object):
     def __init__(self, model_dir: str):
-        self.max_words_per_line = 12
+        self.max_words_per_line = 14
 
         # Load the dictionary
         with open(os.path.join(model_dir, "english_scansion_tool.pkl"), "rb") as f:
@@ -1475,8 +1475,8 @@ class EnglishPoetryScansion(object):
         plines = [self.parse_line(line) for line in poem_lines]
 
         for pline in plines:
-            if len(pline) > self.max_words_per_line:
-                raise RuntimeError(f'Too many words in a line {pline}')
+            if sum(token.is_word for token in pline) > self.max_words_per_line:
+                raise RuntimeError('Too many words in a line {}'.format(' | '.join(map(str, pline))))
 
         # Try every meter, estimate fitness and choose the best one.
         best_score = 0.0
@@ -1562,6 +1562,9 @@ if __name__ == '__main__':
 
     # Load the dictionary
     tool = EnglishPoetryScansion(model_dir="/home/inkoziev/polygon/text_generator/models/scansion_tool")
+
+    sx = tool.get_syllables("dreamily")
+    print(sx)
 
     sx = tool.get_syllables("maidenhead")
     print(sx)
