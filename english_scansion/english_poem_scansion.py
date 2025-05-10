@@ -295,6 +295,7 @@ phoneme_matching = {('T', 'TH'): 0.85,
                     ('D', 'TH'): 0.70,
 
                     ('IY1', 'IH1'): 0.85,  # fit - feet
+                    ('OW1', 'AO1'): 0.85,  # bald - all
                     }
 
 
@@ -747,7 +748,7 @@ class MetreMappingCursor(object):
                         # Ударения не должно быть, но в слове этот слог ударный
 
                         # Артикли и некоторые другие grammar words не штрафуем за безударность.
-                        if re.search(r'^(a|an|the|at|by|to|on|in|for|as|am|is|are|were|was|do|did|does|have|has|had|then|and|or|but|so|I|you|me|he|she|it|O)$', current_mapping.pronuncation.form, flags=re.I):
+                        if re.search(r'^(ah|oh|us|a|an|the|at|by|to|on|in|for|as|am|is|are|were|was|do|did|does|have|has|had|then|and|or|but|so|I|you|me|he|she|it|O)$', current_mapping.pronuncation.form, flags=re.I):
                             new_mapping = copy.deepcopy(current_mapping)
                             new_mapping.TN += 1
                             new_mapping.meter_cursor += 1
@@ -1252,6 +1253,18 @@ class EnglishPoetryScansion(object):
         phonemes2 = self.get_phonemes(word2)[0]
         return self.do_pronunciation_rhyme(phonemes1, phonemes2)
 
+    def extract_clausula_phones(self, phones):
+        result = []
+        offset = len(phones)-1
+        while offset >= 0:
+            phone = phones[offset]
+            if phone[:2] in vowels:
+                if phone[2] in ('1', '2'):
+                    clausula_phones = phones[offset:]
+                    result.append(clausula_phones)
+            offset -= 1
+        return result
+
     def do_pronunciation_rhyme(self, phonemes1, phonemes2) -> RhymedWords:
         if not phonemes1 or not phonemes2:
             return RhymedWords.unrhymed()
@@ -1294,11 +1307,52 @@ class EnglishPoetryScansion(object):
                 if sim > 0:
                     fit_score *= sim
                 else:
-                    return RhymedWords.unrhymed()
+                    break
 
             offset -= 1
             if -offset > len(phonemes1) or -offset > len(phonemes2):
                 break
+
+        # Алгоритм №2 - ищем созвучие ударного гласного + минимум одной согласной после нее
+        #
+        # hill <---> field
+        clausula_phones1 = self.extract_clausula_phones(phonemes1)
+        clausula_phones2 = self.extract_clausula_phones(phonemes2)
+        # Перебираем варианты сочетаний клаузул, выбираем лучшее
+        best_sim = 0.0
+        best_clausula1 = None
+        best_clausula2 = None
+        for clausula1 in clausula_phones1:
+            for clausula2 in clausula_phones2:
+                num_matched_phones = 0
+                for i, (phone1, phone2) in enumerate(zip(clausula1, clausula2)):
+
+                    phone_sim = 0.0
+                    if phone1[:2] == phone2[:2]:
+                        phone_sim = 1.0
+                    elif (phone1, phone2) in phoneme_matching:
+                        phone_sim = phoneme_matching[(phone1, phone2)]
+                    elif (phone2, phone1) in phoneme_matching:
+                        phone_sim = phoneme_matching[(phone2, phone1)]
+
+                    if phone_sim == 0 and i <= 1:
+                        # Ударные гласные или первая согласная после неё не совпали - фиксируем провал
+                        break
+
+                    num_matched_phones += phone_sim
+
+                if num_matched_phones > best_sim:
+                    best_sim = num_matched_phones
+                    best_clausula1 = clausula1
+                    best_clausula2 = clausula2
+
+        if best_sim > 0:
+            clausula1_str = ' '.join(best_clausula1)
+            clausula2_str = ' '.join(best_clausula2)
+
+            fit_score = best_sim / max(len(best_clausula1), len(best_clausula2))
+
+            return RhymedWords(clausula1=clausula1_str, clausula2=clausula2_str, score=fit_score)
 
         return RhymedWords.unrhymed()
 
@@ -1516,7 +1570,7 @@ class EnglishPoetryScansion(object):
                 for rhyme in rhyme_graph:
                     if rhyme.fit_to_right is None:
                         if rhyme.fit_to_left is None:
-                            rhyme_score *= 0.5
+                            rhyme_score *= (1.0 - 1.0/(2*len(rhyme_graph)))
                     else:
                         rhyme_score *= rhyme.fit_to_right.score
 
