@@ -28,8 +28,8 @@ import numpy as np
 from nltk.corpus import cmudict
 from typing import List, Set, Dict, Tuple, Optional
 
-from generative_poetry.tokenization_utils import tokenize_slowly
-from generative_poetry.whitespace_normalization import normalize_whitespaces
+from .tokenization_utils import tokenize_slowly
+from .whitespace_normalization import normalize_whitespaces
 
 
 def tokenize(s):
@@ -467,6 +467,9 @@ class MetreMappingResult(object):
     def count_stress_marks(self) -> int:
         n = sum(word_mapping.count_stress_marks() for word_mapping in self.word_mappings)
         return n
+
+    def is_empty(self) -> bool:
+        return len(self.word_mappings) == 0
 
     def get_stressed_line(self, show_syllables) -> str:
         s = ' '.join(word_mapping.render_accentuation(show_syllables) for word_mapping in self.word_mappings)

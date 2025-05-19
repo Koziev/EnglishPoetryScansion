@@ -1,7 +1,7 @@
 import typing
 import re
 
-from emoji import EMOJI_CHARACTER
+from .emoji import EMOJI_CHARACTER
 
 
 def tokenize_slowly(text: str):
