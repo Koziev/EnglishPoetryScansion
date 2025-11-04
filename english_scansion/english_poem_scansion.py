@@ -950,7 +950,7 @@ class EnglishPoemScansion(object):
         for stanza in stanzas:
             if line_mappings:
                 line_mappings.append(MetreMappingResult.build_for_empty_line())
-                rhyme_graph.append(RhymeGraphNode)
+                rhyme_graph.append(RhymeGraphNode())
             line_mappings.extend(stanza.line_mappings)
             rhyme_graph.extend(stanza.rhyme_graph)
 
